@@ -95,14 +95,75 @@ sub run
 
     # FUTURE DEV NOTE: If we support other input options
     # The fastas need to end up in the raw_fasta_dir - NB March 2025
+
+    ## NB DEV NB TO DO update to work with API change 
+    #my $master_table_fp = "/home/nbowers/bvbrc-dev/dev_container/cgmlst_for_all/all_salmonella_inital_updated.tsv";
+    my $master_table_dir = "/home/nbowers/bvbrc-dev/dev_container/cgmlst_for_all/rerunning_joins_11_25_2025/raw_genome_ids/";
+    # nicole 
+    # $config_vars{schema_location} = application_backend_dir . "/CoreGenomeMLST/chewbbaca_schemas";
+    my $schema_name = lc($params->{input_schema_selection});
+    #my $master_table_fp = $master_table_dir . "$params->{input_schema_selection}_11_25_2025_joined.tsv";
+    my $master_table_fp = $master_table_dir . $schema_name . "_11_25_2025_joined.tsv";
+    my $processed_id_fp = "$work_dir/processed_genome_ids.txt";
+    my $unprocessed_id_fp = "$work_dir/unprocessed_genome_ids.txt";
+    my @unprocessed_genome_ids;
+    my $precomputed_clusters_dir = application_backend_dir . "/CoreGenomeMLST/precomputed_clusters/";
+    my $precomputed_clusters_path = $precomputed_clusters_dir . lc($params->{input_schema_selection}) . ".cgMLSTv1.npz";
+
     if ($params->{input_genome_type} eq 'genome_group')
     {
         my $genome_group_path = $params->{input_genome_group};
         print($genome_group_path);
         my $group_name = basename($genome_group_path);
         my $api = P3DataAPI->new;
-        my @group_genome_ids = $api->retrieve_patric_ids_from_genome_group($genome_group_path);
-        $api ->retrieve_contigs_in_genomes(@group_genome_ids, $raw_fasta_dir, "%s");
+        my $group_genome_ids = $api->retrieve_patric_ids_from_genome_group($genome_group_path);
+        my $genome_id_file = "$work_dir/genome_id_list.txt";
+        open(my $fh, ">", $genome_id_file) or die "Could not open file: $!";
+        foreach my $item (@$group_genome_ids) {  
+            print $fh "$item\n";
+        }
+        close $fh;
+
+        # search the precomputed profiles for the ids listed in the genome group
+        open my $lfh, "<", $genome_id_file or die "Cannot open $genome_id_file: $!";
+        my %list_ids;
+        while (<$lfh>) {
+            chomp;
+            s/\r$//;      # remove CR if Windows line endings
+            next unless $_;
+            $list_ids{$_} = 0;   # initialize as "not seen yet"
+        }
+        close $lfh;
+
+        # Scan master table.tsv (only column 1, FILE)
+        open my $tfh, "<", $master_table_fp or die "Cannot open $master_table_fp: $!";
+        my $header = <$tfh>;  # skip header
+        while (<$tfh>) {
+            chomp;
+            my ($id) = split /\t/, $_, 2;
+            if (exists $list_ids{$id}) {
+                $list_ids{$id} = 1;   
+            }
+        }
+        close $tfh;
+
+        open my $ppg, ">", $processed_id_fp or die "Cannot write $processed_id_fp: $!";
+        open my $upg, ">", $unprocessed_id_fp  or die "Cannot write $unprocessed_id_fp: $!";
+
+        for my $id (sort keys %list_ids) {
+            if ($list_ids{$id}) {
+                print $ppg "$id\n";
+            } else {
+                print $upg "$id\n";
+                push @unprocessed_genome_ids, $id;
+            }
+        }
+
+        close $ppg;
+        close $upg;
+
+        # Edit this to retreive only the genome ids we need 
+        $api ->retrieve_contigs_in_genomes(\@unprocessed_genome_ids, $raw_fasta_dir, "%s");
         # # my @genome_metadata_fields = (
         # #   "genome_name", "genome_id", "ncbi_taxon_id", "organism_name", "taxon_lineage_ids", "taxon_lineage_names",
         # #   "superkingdom", "kingdom", "phylum", "class", "order", "family", "genus", "species", "genome_status", "strain", 
@@ -117,7 +178,8 @@ sub run
         "genome_id", "genome_name", "species", "strain", "genbank_accessions", "subtype", "lineage", "clade", "host_group", 
         "host_common_name", "host_scientific_name", "collection_year", "geographic_group", "isolation_country", "genome_status", 
         "state_province", "state");
-        my @genome_group_metadata = $api->retrieve_genome_metadata(@group_genome_ids, \@genome_metadata_fields);
+        # Get metadata for all genomes in the group
+        my @genome_group_metadata = $api->retrieve_genome_metadata($group_genome_ids, \@genome_metadata_fields);
         my $json_string = encode_json(@genome_group_metadata);
         print $json_string;
         # write metdata to json
@@ -173,6 +235,8 @@ sub run
 
     $config_vars{cores} = $ENV{P3_ALLOCATED_CPU} // 2;
     $config_vars{schema_location} = application_backend_dir . "/CoreGenomeMLST/chewbbaca_schemas";
+    $config_vars{precomputed_clusters_path} = $precomputed_clusters_path;
+    $config_vars{master_tsv} = $master_table_fp;
     $config_vars{snakemake} = $snakemake;
     $config_vars{workflow_dir} = $wf_dir;
     $config_vars{input_data_dir} = $staging_dir;
@@ -180,6 +244,8 @@ sub run
     $config_vars{work_data_dir} = $work_dir;
     $config_vars{clean_data_dir} = $clean_fasta_dir;
     $config_vars{raw_fasta_dir} = $raw_fasta_dir;
+    $config_vars{processed_genome_ids} = $processed_id_fp;
+    $config_vars{unprocessed_genome_ids} = $unprocessed_id_fp;
 
     # add the params to the config file
     $config_vars{params} = $params;
@@ -199,7 +265,9 @@ sub run
         "--printshellcmds",
         "--keep-going",
         "--snakefile",
-        "$wf_dir/snakefile/run_cgMLST_snakefile"
+        # NB Dev
+        # "$wf_dir/snakefile/run_cgMLST_snakefile"
+        "/home/nbowers/bvbrc-dev/dev_container/modules/bvbrc_CoreGenomeMLST/workflow/snakefile/run_cgMLST_snakefile_precomputed_profiles"
     );
     print STDERR "Run: @cmd\n";
 
@@ -235,6 +303,7 @@ sub save_output_files
     my %suffix_map = (
             tre => 'nwk',
             tsv => 'tsv',
+            cgMLSTv1 => 'tsv',
             NJ => 'txt',
             ML => 'txt',
             vcf => 'vcf',
