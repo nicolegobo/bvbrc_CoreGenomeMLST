@@ -18,7 +18,7 @@ master_TSV = data["master_tsv"]
 # check if you need all of these?
 processed_genome_ids = data["processed_genome_ids"]
 unprocessed_genome_ids = data["unprocessed_genome_ids"]
-genome_group_name = data["params"]["input_genome_group"].split("/")[-1]
+genome_group_name = data["params"]["input_genome_group"].split("/")[-1].replace(" ", "_")
 
 processed_genomes = Path(processed_genome_ids)
 unprocessed_genomes = Path(unprocessed_genome_ids)
