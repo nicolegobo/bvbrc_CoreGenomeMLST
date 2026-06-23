@@ -189,6 +189,9 @@ rule run_grapetree_cli:
         phyloxml = "{}/{}_MSTreeV2.tre.phyloxml".format(output_dir, genome_group_name),
         distance = "{}/{}_distance.phylip".format(output_dir, genome_group_name),
         output_report = "{}/cgMLST_Report.html".format(output_dir),
+        dist_matrix_tsv = "{}/distance_metrics/cgMLST_Report_distance_matrix.tsv".format(output_dir),
+        dist_report = "{}/distance_metrics/cgMLST_distance.report".format(output_dir),
+        metadata_tsv = "{}/metadata.tsv".format(output_dir),
         cluster_result = "{}/{}_cluster_result_cgMLSTv1.HierCC".format(output_dir, genome_group_name),
         npz = "{}/{}_cluster_result_cgMLSTv1.npz".format(output_dir, genome_group_name),
         final_out = "{}/result_alleles.tsv".format(output_dir)

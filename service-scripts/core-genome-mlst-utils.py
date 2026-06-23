@@ -206,9 +206,35 @@ def create_cgmlst_metadata_table(metadata_json, tsv_out):
             row.setdefault(header, "N/A")
 
     metadata_df = pd.json_normalize(metadata)
+    if "genome_id" in metadata_df.columns:
+        cols = ["genome_id"] + [c for c in metadata_df.columns if c != "genome_id"]
+        metadata_df = metadata_df[cols]
     metadata_df.to_csv(tsv_out, index=False, sep="\t")
 
     return metadata, metadata_df
+
+
+def write_cgmlst_distance_report(ids, dist_matrix, report_path):
+    """Write a pairwise distance report matching kSNPdist.report format.
+
+    Produces a tab-separated file with a header row and one line per unique
+    genome pair (upper triangle only).  Columns: distance, genome_id_1, genome_id_2.
+
+    Parameters
+    ----------
+    ids : list of str
+        Genome IDs in the same order as dist_matrix rows/columns.
+    dist_matrix : np.ndarray or list of lists, shape (n, n)
+        Symmetric integer distance matrix.
+    report_path : str
+        Output file path.
+    """
+    with open(report_path, "w") as f:
+        f.write("distance\tgenome_id_1\tgenome_id_2\n")
+        n = len(ids)
+        for i in range(n):
+            for j in range(i + 1, n):
+                f.write("{}\t{}\t{}\n".format(int(dist_matrix[i][j]), ids[i], ids[j]))
 
 
 def parse_result_alleles(result_alleles_tsv):
@@ -1170,6 +1196,12 @@ def build_distance_analysis_html():
                oninput="buildDistTable()">
       </label>
       <span id="dmRowCount" style="color:#555; font-size:13px;"></span>
+      <button onclick="exportDistTableToExcel()"
+              style="padding:5px 14px; font-size:13px; cursor:pointer;
+                     background:#217346; color:white; border:none;
+                     border-radius:4px; margin-left:auto;">
+        &#8681; Export to Excel
+      </button>
     </div>
     <!-- Color legend (labels updated dynamically by buildDistTable) -->
     <div style="display:flex; gap:16px; align-items:center; margin-bottom:10px; font-size:12px; flex-wrap:wrap;">
@@ -1358,6 +1390,73 @@ def build_distance_analysis_html():
             : 'Showing ' + visibleRows.length + ' of ' + n + ' genomes';
       }
 
+      // ===== Excel export for Distance Matrix Table =====
+      function colorToRgb(color) {
+        if (color === 'white') return 'FFFFFF';
+        const hex = color.replace('#', '');
+        return hex.length === 3
+          ? hex.split('').map(c => c + c).join('').toUpperCase()
+          : hex.toUpperCase();
+      }
+
+      function exportDistTableToExcel() {
+        if (typeof XLSX === 'undefined') {
+          alert('Excel export library not loaded. Please check your internet connection.');
+          return;
+        }
+        const searchVal = document.getElementById('dmSearch')
+          ? document.getElementById('dmSearch').value.trim().toLowerCase() : '';
+        const { t } = getDmThresholds();
+        const labels = genomeLabels;
+        const matrix = distMatrix;
+
+        const visibleRows = [];
+        labels.forEach((lbl, i) => {
+          if (!searchVal || lbl.toLowerCase().includes(searchVal)) visibleRows.push(i);
+        });
+
+        const wsData = [];
+        const headerRow = [{ v: '', s: { font: { bold: true }, fill: { patternType: 'solid', fgColor: { rgb: 'E0E0E0' } } } }];
+        labels.forEach(lbl => {
+          headerRow.push({
+            v: lbl,
+            s: {
+              font: { bold: true },
+              fill: { patternType: 'solid', fgColor: { rgb: 'E0E0E0' } },
+              alignment: { textRotation: 90, horizontal: 'center', vertical: 'bottom' }
+            }
+          });
+        });
+        wsData.push(headerRow);
+
+        visibleRows.forEach(i => {
+          const row = [{
+            v: labels[i],
+            s: { font: { bold: true }, fill: { patternType: 'solid', fgColor: { rgb: 'E0E0E0' } } }
+          }];
+          labels.forEach((lbl, j) => {
+            const val = matrix[i][j];
+            const { bg, fg } = getDmColor(val, t);
+            row.push({
+              v: val,
+              t: 'n',
+              s: {
+                fill: { patternType: 'solid', fgColor: { rgb: colorToRgb(bg) } },
+                font: { color: { rgb: colorToRgb(fg) } },
+                alignment: { horizontal: 'center' }
+              }
+            });
+          });
+          wsData.push(row);
+        });
+
+        const ws = XLSX.utils.aoa_to_sheet(wsData);
+        ws['!cols'] = [{ wch: 22 }].concat(labels.map(() => ({ wch: 10 })));
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Distance Matrix');
+        XLSX.writeFile(wb, 'cgmlst_distance_matrix.xlsx');
+      }
+
       // ===== Initialise on load + sync with heatmap threshold =====
       document.addEventListener('DOMContentLoaded', function () {
         buildClosePairs();
@@ -1456,6 +1555,8 @@ def define_html_template(summary_table_html, barplot_html,
 
   <!-- Plotly.js v3.0.1 -->
   <script src="https://cdn.plot.ly/plotly-3.0.1.min.js"></script>
+  <!-- xlsx-js-style for Excel export with cell colours -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
   <!-- DataTables CSS -->
   <link rel="stylesheet" href="https://cdn.datatables.net/1.13.4/css/jquery.dataTables.min.css">
 </head>
@@ -1779,18 +1880,27 @@ def write_html_report(result_alleles, metadata_json, html_report_path, svg_dir, 
     # Use the display IDs (periods) for the report
     ids = dist_genome_ids_display
 
+    output_dir = os.path.dirname(os.path.abspath(html_report_path))
+    distance_metrics_dir = os.path.join(output_dir, "distance_metrics")
+    os.makedirs(distance_metrics_dir, exist_ok=True)
+
     click.echo("Writing distance matrix ...")
-    dist_matrix_path = os.path.splitext(html_report_path)[0] + "_distance_matrix.tsv"
+    dist_matrix_path = os.path.join(distance_metrics_dir, "cgMLST_Report_distance_matrix.tsv")
     dist_df = pd.DataFrame(dist_matrix, index=ids, columns=ids)
     dist_df.index.name = "FILE"
     dist_df.to_csv(dist_matrix_path, sep="\t")
     click.echo("  Distance matrix written to {}".format(dist_matrix_path))
 
+    click.echo("Writing pairwise distance report ...")
+    dist_report_path = os.path.join(distance_metrics_dir, "cgMLST_distance.report")
+    write_cgmlst_distance_report(ids, dist_matrix, dist_report_path)
+    click.echo("  Distance report written to {}".format(dist_report_path))
+
     click.echo("Clustering for heatmap ...")
     clustered_labels, clustered_matrix = cluster_heatmap_data(ids, dist_matrix)
 
     click.echo("Building metadata table ...")
-    metadata, metadata_df = create_cgmlst_metadata_table(metadata_json, "cgmlst_metadata.tsv")
+    metadata, metadata_df = create_cgmlst_metadata_table(metadata_json, "metadata.tsv")
     metadata_json_string = json.dumps(metadata)
 
     click.echo("Creating loci coverage bar plot ...")
@@ -1861,6 +1971,11 @@ def write_html_report(result_alleles, metadata_json, html_report_path, svg_dir, 
 
     with open(html_report_path, "w") as f:
         f.write(html)
+
+    metadata_tsv_dst = os.path.join(output_dir, "metadata.tsv")
+    if os.path.exists("metadata.tsv"):
+        shutil.copy("metadata.tsv", metadata_tsv_dst)
+        click.echo("  Metadata TSV written to {}".format(metadata_tsv_dst))
 
     click.echo("Report written to {}".format(html_report_path))
 
