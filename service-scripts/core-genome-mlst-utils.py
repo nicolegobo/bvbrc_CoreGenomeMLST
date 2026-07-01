@@ -54,27 +54,28 @@ def clean_file(allelic_profile):
         orig_writer.writerow(header)
 
         # ---- Data rows ----
-        seen_rows = set()  # track duplicate rows from precomputed data
+        seen_ids = set()  # track genome IDs already written; first occurrence (newest assignment) wins
         for idx, row in enumerate(reader):
             if not row:
                 continue  # skip completely empty lines
 
-            # Skip duplicate rows
-            row_key = tuple(row)
-            if row_key in seen_rows:
-                print("Skipping duplicate row: {}".format(row[0]))
+            # Normalize genome ID (chewBBACA uses '_' in place of '.') before dedup
+            col1_value = row[0].replace('_', '.')
+
+            # Keep only the first occurrence of each genome ID — JoinProfiles puts
+            # newly computed assignments before the older reference rows, so the
+            # first occurrence is always the new assignment.
+            if col1_value in seen_ids:
+                print("Skipping duplicate genome ID: {}".format(col1_value))
                 continue
-            seen_rows.add(row_key)
+            seen_ids.add(col1_value)
 
             # Record mapping from index -> original first-column value
-            col1_value = row[0]
             mapping[idx] = col1_value
 
             # Start with a copy of the row
             new_row_orig = row[:]
-
-            # Replace underscores with periods in the first column (genome ID)
-            new_row_orig[0] = col1_value.replace('_', '.')
+            new_row_orig[0] = col1_value
 
             # For all columns after the first (index 1..end),
             # replace any non-numeric (non-digits-only) value with "0"
@@ -209,6 +210,11 @@ def create_cgmlst_metadata_table(metadata_json, tsv_out):
     if "genome_id" in metadata_df.columns:
         cols = ["genome_id"] + [c for c in metadata_df.columns if c != "genome_id"]
         metadata_df = metadata_df[cols]
+
+    def to_pascal_case(name):
+        return "".join(p.capitalize() for p in name.split("_"))
+
+    metadata_df.columns = [to_pascal_case(c) for c in metadata_df.columns]
     metadata_df.to_csv(tsv_out, index=False, sep="\t")
 
     return metadata, metadata_df
